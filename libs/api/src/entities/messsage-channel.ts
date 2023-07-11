@@ -12,15 +12,15 @@
 import { assert } from '@explorers-club/utils';
 import {
   Entity,
+  ChannelEvent,
   MessageChannelCommand,
   MessageChannelContext,
   MessageChannelEntity,
   MessageChannelMachine,
-  MessageData,
 } from '@explorers-club/schema';
 import { World } from 'miniplex';
 import { createMachine } from 'xstate';
-import { entitiesById } from '../server/state';
+import { channelsById, entitiesById } from '../server/state';
 import { Observable, lastValueFrom, map } from 'rxjs';
 
 // return createMachine({
@@ -44,12 +44,9 @@ export const createMessageChannelMachine = ({
   const messageChannelEntity = entity as MessageChannelEntity;
   const parentEntity = entitiesById.get(messageChannelEntity.parentId);
   assert(parentEntity, "expected parentEntity but wasn't found");
-  assert('channel' in parentEntity, 'expected channel in parentEntity');
-  const channel = parentEntity.channel as Observable<MessageData>;
+  const channel = channelsById.get(parentEntity.id);
+  assert(channel, 'expected channel in parentEntity');
 
-  // channel.subscribe((e) => {
-  //   console.log('listening from msg channel', e);
-  // });
   return createMachine({
     id: 'MessageChannelMachine',
     initial: 'Initialized',
@@ -74,7 +71,12 @@ export const createMessageChannelMachine = ({
                   ];
                 });
 
-                await parentEntity.channel.toPromise();
+                const parentChannel = channelsById.get(parentEntity.id);
+                assert(
+                  parentChannel,
+                  'expect parentChannel when subscribing to chanel'
+                );
+                await parentChannel.toPromise();
               },
             },
           },

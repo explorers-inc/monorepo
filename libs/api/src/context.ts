@@ -2,12 +2,17 @@
 // Inner context is context which doesn't depend on the request (e.g. DB)
 import { Database } from '@explorers-club/database';
 import { ConnectionEntity, SnowflakeId } from '@explorers-club/schema';
+import { assert } from '@explorers-club/utils';
+import { ConnectionAccessTokenPropsSchema } from '@schema/common';
 import { createClient } from '@supabase/supabase-js';
 import { type inferAsyncReturnType } from '@trpc/server';
+import * as trpcExpress from '@trpc/server/adapters/express';
 import { IncomingMessage } from 'http';
+import * as JWT from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { createEntity } from './ecs';
-import { world } from './server/state';
+import { entitiesById, world } from './server/state';
+import { waitForEntity } from './world';
 
 const supabaseUrl = process.env['SUPABASE_URL'];
 const supabaseJwtSecret = process.env['SUPABASE_JWT_SECRET'];
@@ -39,7 +44,21 @@ supabaseAdminClient
   });
 
 type CreateContextOptions = {
-  socket: WebSocket;
+  request:
+    | {
+        type: 'socket';
+        socket: WebSocket;
+      }
+    | { type: 'http'; request: trpcExpress.CreateExpressContextOptions['req'] };
+  response:
+    | {
+        type: 'socket';
+        socket: WebSocket;
+      }
+    | {
+        type: 'http';
+        response: trpcExpress.CreateExpressContextOptions['res'];
+      };
   connectionEntity: ConnectionEntity;
   instanceId: SnowflakeId;
 };
@@ -53,36 +72,99 @@ export const createContextInner = async (ctx: CreateContextOptions) => {
   return ctx;
 };
 
+export const createContextHTTP = async (
+  opts: trpcExpress.CreateExpressContextOptions
+) => {
+  const accessToken = opts.req.headers.authorization?.split('Bearer ')[1];
+  assert(
+    accessToken,
+    'expected authorizaiton header to be of form Bearer ACCESS_TOKEN'
+  );
+  const { sub, sessionId, deviceId, initialRouteProps, url } =
+    parseAccessToken(accessToken);
+
+  console.log('creating connection', sub);
+  const connectionEntity = createEntity<ConnectionEntity>({
+    id: sub,
+    schema: 'connection',
+    instanceId,
+    currentGeolocation: undefined,
+    allChannelIds: [],
+    currentUrl: url,
+    sessionId,
+    deviceId,
+    initialRouteProps,
+  });
+  world.add(connectionEntity);
+  console.log('connection created', sub);
+
+  return {
+    connectionEntity,
+    instanceId,
+    request: {
+      type: 'http',
+      request: opts.req,
+    },
+    response: {
+      type: 'http',
+      response: opts.res,
+    },
+  } satisfies CreateContextOptions;
+};
+
 /**
  * This is the actual context you'll use in your router
  * @link https://trpc.io/docs/context
  **/
-export const createContext = async (opts: {
+export const createContextWebsocket = async (opts: {
   req: IncomingMessage;
   res: WebSocket;
 }) => {
-  const socket = opts.res;
+  assert(opts.req.url, 'expected url in url');
+  assert(opts.req.headers.host, 'expected host in request');
+  const url = new URL(opts.req.url, `ws://${opts.req.headers.host}`);
+  const accessToken = url.searchParams.get('accessToken');
+  assert(accessToken, "couldn't parse accessToken from connection url");
 
-  const connectionEntity = createEntity<ConnectionEntity>({
-    schema: 'connection',
-    instanceId,
-    connectedRoomSlugs: [],
-    activeRoomSlugs: [],
-    currentGeolocation: undefined,
-  });
-  world.add(connectionEntity);
+  const { sub } = parseAccessToken(accessToken);
+  const connectionEntity = await waitForEntity(world, entitiesById, sub);
+  assert(
+    connectionEntity.schema === 'connection',
+    'got type of entity for connection: ' + connectionEntity.schema
+  );
+
+  // todo: its possible that connectionEntity doesn't exist yet,
+  // we can create it from the accessToken sync if we have to
+
+  const socket = opts.res;
 
   const contextInner = await createContextInner({
     connectionEntity,
-    socket,
+    request: {
+      type: 'socket',
+      socket,
+    },
     instanceId,
+    response: {
+      type: 'socket',
+      socket,
+    },
   });
 
   return {
     ...contextInner,
-    req: opts.req,
-    socket: opts.res,
-  };
+    // pass on the same props for other middleware, might not need to do
+    // req: opts.req,
+    // socket: opts.res,
+  } satisfies CreateContextOptions;
 };
 
-export type Context = inferAsyncReturnType<typeof createContextInner>;
+export type TRPCContext = inferAsyncReturnType<typeof createContextInner>;
+
+const parseAccessToken = (accessToken: string) => {
+  const verifiedToken = JWT.verify(accessToken, 'my_private_key', {
+    jwtid: 'ACCESS_TOKEN',
+  });
+
+  return ConnectionAccessTokenPropsSchema.parse(verifiedToken);
+};

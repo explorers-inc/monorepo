@@ -1,12 +1,12 @@
 import {
   ConnectionEntity,
   Entity,
-  EntityCommandSchema,
   EntityEvent,
   EntityListEvent,
   SnowflakeId,
-  SnowflakeIdSchema,
 } from '@explorers-club/schema';
+import { EntityCommandSchema } from '@schema/entity';
+import { SnowflakeIdSchema } from '@schema/common';
 import { TRPCError } from '@trpc/server';
 import { Observer, observable } from '@trpc/server/observable';
 import { AnyFunction } from 'xstate';
@@ -15,19 +15,19 @@ import { world, entitiesById } from '../../server/state';
 import { z } from 'zod';
 
 const SendMutationSchema = z.object({
-  id: SnowflakeIdSchema,
-  event: EntityCommandSchema,
+  entityId: SnowflakeIdSchema,
+  command: EntityCommandSchema,
 });
 
 export const entityRouter = router({
   send: protectedProcedure
     .input(SendMutationSchema)
     .mutation(({ ctx, input }) => {
-      const entity = entitiesById.get(input.id);
+      const entity = entitiesById.get(input.entityId);
       if (!entity) {
         throw new TRPCError({
           code: 'NOT_FOUND',
-          message: `entity ${input.id} not found`,
+          message: `entity ${input.entityId} not found`,
         });
       }
 
@@ -39,7 +39,10 @@ export const entityRouter = router({
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      entity.send(input.event as any);
+      entity.send({
+        senderId: ctx.connectionEntity.id,
+        ...(input.command as any),
+      });
     }),
   list: publicProcedure.subscription(({ ctx }) => {
     // Track if entities get removed
@@ -315,8 +318,10 @@ const hasAccess = (entity: Entity, connectionEntity: ConnectionEntity) => {
 };
 
 const hasWriteAccess = (entity: Entity, connectionEntity: ConnectionEntity) => {
-  // Only conneciton entities can be sent to and it must match the sender
-  return entity.id === connectionEntity.id;
+  // For now all entities can send events to everybody...
+  return true;
+  // // Only conneciton entities can be sent to and it must match the sender
+  // return entity.id === connectionEntity.id;
 };
 
 // // const [baseEntityIndex, baseEntityIndex$] = createArchetypeIndex(

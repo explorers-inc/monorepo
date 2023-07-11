@@ -1,5 +1,14 @@
 ---
+import type { RouteProps } from '@explorers-club/schema';
+import { initAccessToken } from '../auth';
 import Layout from '../layouts/Layout.astro';
+
+const routeProps = { name: 'Login' } satisfies RouteProps;
+const accessToken = initAccessToken(Astro.cookies, routeProps, Astro.url.href);
 ---
 
-<Layout title="Explorers Game" routeProps={{ name: 'Login' }} />
+<Layout
+  title="Explorers Game"
+  routeProps={{ name: 'Login' }}
+  accessToken={accessToken}
+/>

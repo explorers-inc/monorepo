@@ -151,7 +151,9 @@ export type SidekickAbilityMessage = z.infer<
 >;
 export type ButlerAbilityMessage = z.infer<typeof ButlerAbilityMessageSchema>;
 export type TwinBoyAbilityMessage = z.infer<typeof TwinBoyAbilityMessageSchema>;
-export type TwinGirlAbilityMessage = z.infer<typeof TwinGirlAbilityMessageSchema>;
+export type TwinGirlAbilityMessage = z.infer<
+  typeof TwinGirlAbilityMessageSchema
+>;
 export type MonkAbilityMessage = z.infer<typeof MonkAbilityMessageSchema>;
 export type VigilanteAbilityPrimaryMessage = z.infer<
   typeof VigilanteAbilityPrimaryMessageSchema

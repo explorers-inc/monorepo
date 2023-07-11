@@ -1,7 +1,7 @@
 import { Flex } from '@atoms/Flex';
 import type { RouteProps } from '@explorers-club/schema';
 import { styled } from '@explorers-club/styles';
-import { useCurrentRoomEntityStore } from '@hooks/useCurrentRoomEntityStore';
+import { useCurrentChannelEntityStore } from '@hooks/useCurrentChannelEntityStore';
 import { useStore } from '@nanostores/react';
 import { Chat, ChatContext } from '@organisms/Chat';
 import { FC, useContext } from 'react';
@@ -14,8 +14,8 @@ import { TopNav } from './TopNav';
 import { ApplicationContext } from '@context/ApplicationContext';
 import { LayoutContext } from '@context/LayoutContext';
 import { WorldContext } from '@context/WorldProvider';
-import { MainPanel } from './MainPanel';
-import { MainScene } from './MainScene';
+import { RoutePanel } from './RoutePanel';
+import { ScenePanel } from './ScenePanel';
 import { Menu } from './Menu';
 
 interface Props {
@@ -39,15 +39,15 @@ export const App: FC<Props> = ({ initialRouteProps }) => {
 
   return (
     <AppContainer>
-      <MainScene />
+      <ScenePanel />
       <Menu />
-      <MainUI />
+      <MainPanel />
       {/* <Modal /> */}
     </AppContainer>
   );
 };
 
-const MainUI = () => {
+const MainPanel = () => {
   const { isMainPanelFocusedStore } = useContext(LayoutContext);
   const isMainPanelFocused = useStore(isMainPanelFocusedStore);
 
@@ -77,7 +77,8 @@ const MainUI = () => {
         // },
       }}
     >
-      <MainPanel />
+      {/* <MainPanel /> */}
+      <RoutePanel />
       <ChatPanel />
     </Flex>
   );
@@ -90,7 +91,7 @@ const ChatPanel = () => {
   const connectionEntity = useStore(
     entityStoreRegistry.myInitializedConnectionEntity
   );
-  const roomEntityStore = useCurrentRoomEntityStore();
+  const roomEntityStore = useCurrentChannelEntityStore();
   const roomEntity = useStore(roomEntityStore);
 
   if (mainPanelFocused) {

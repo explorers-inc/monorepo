@@ -4,19 +4,26 @@ import { useCreateEntityStore } from '@hooks/useCreateEntityStore';
 import { useEntityStoreSelector } from '@hooks/useEntityStoreSelector';
 import { useContext } from 'react';
 
-export const useCurrentRoomEntityStore = () => {
+export const useCurrentChannelEntityStore = () => {
   const { entityStoreRegistry } = useContext(WorldContext);
-  const currentRoomSlug = useEntityStoreSelector(
+  const currentChannelId = useEntityStoreSelector(
     entityStoreRegistry.myInitializedConnectionEntity,
-    (entity) => entity.currentRoomSlug
+    (entity) => entity.currentChannelId
   );
+  // console.log('CURRENT CHANNEL', { currentChannelId });
 
   return useCreateEntityStore<RoomEntity>(
     (entity) => {
-      return (currentRoomSlug &&
+      // console.log(
+      //   'checking channel query',
+      //   entity.schema,
+      //   entity.id,
+      //   currentChannelId
+      // );
+      return (currentChannelId &&
         entity.schema === 'room' &&
-        entity.slug === currentRoomSlug) as boolean;
+        entity.id === currentChannelId) as boolean;
     },
-    [currentRoomSlug]
+    [currentChannelId]
   );
 };

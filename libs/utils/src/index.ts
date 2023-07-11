@@ -1,12 +1,10 @@
-import {
-  ConnectionEntity,
-  Entity,
-  InitializedConnectionEntity,
-} from '@explorers-club/schema';
+import { Entity } from '@explorers-club/schema';
+import { World } from 'miniplex';
+import { Observable, Subject } from 'rxjs';
 import { EventObject } from 'xstate';
-export * from './types';
-export * from './hooks';
 export * from './forms';
+export * from './hooks';
+export * from './types';
 
 export function assert<T>(
   expression: T,
@@ -15,6 +13,20 @@ export function assert<T>(
   if (!expression) {
     throw new Error(errorMessage);
   }
+}
+
+export function assertEntitySchema<
+  TEntity extends Entity,
+  TSchemaType extends TEntity['schema']
+>(
+  entity: TEntity | undefined | null,
+  schemaType: TSchemaType
+): asserts entity is TEntity & { schema: TSchemaType } {
+  assert(entity, `expected entity of schema ${schemaType} but was null`);
+  assert(
+    entity.schema === schemaType,
+    `expected entity to be schema ${schemaType} but was ${entity.schema}`
+  );
 }
 
 export function assertEventType<
@@ -26,6 +38,17 @@ export function assertEventType<
       `Invalid event: expected "${eventType}", got "${event.type}"`
     );
   }
+}
+
+// todo add other channel schemas here (i.e. dm, group, etc)
+export function assertChannelEntity<TEntity extends Entity>(
+  entity: TEntity | undefined | null
+): asserts entity is TEntity & { schema: 'room' } {
+  assert(entity, `expected entity of but was null`);
+  assert(
+    entity.schema === 'room',
+    `expected entity to be one of: 'room', 'dm', 'group'`
+  );
 }
 
 export const unwrapEvent = <
@@ -128,4 +151,53 @@ export function deepEqual(a: any, b: any): boolean {
   let keys = Object.keys(a);
   if (keys.length !== Object.keys(b).length) return false;
   return keys.every((k) => deepEqual(a[k], b[k]));
+}
+
+export function getValueFromPath(obj: any, path: string): any {
+  // Remove the leading slash and split the path into parts
+  const pathParts = path.slice(1).split('/');
+  let currentValue = obj;
+
+  for (const part of pathParts) {
+    // Handle arrays
+    if (Array.isArray(currentValue)) {
+      currentValue = currentValue[Number(part)];
+    }
+    // Handle objects
+    else if (typeof currentValue === 'object' && currentValue !== null) {
+      currentValue = currentValue[part];
+    }
+    // If the current value is neither an array nor an object, it means the path is invalid
+    else {
+      return undefined;
+    }
+  }
+
+  return currentValue;
+}
+
+export const fromWorld = (world: World<Entity>) => {
+  const subject = new Subject<Entity>();
+  world.onEntityAdded.add((entity) => {
+    subject.next(entity);
+  });
+
+  return subject as Observable<Entity>;
+};
+
+export function isMobileDevice(userAgent: string): boolean {
+  // List of common mobile device keywords
+  const mobileKeywords: string[] = [
+    'Mobile',
+    'Android',
+    'iPhone',
+    'iPad',
+    'Windows Phone',
+    'BlackBerry',
+    'Opera Mini',
+    'IEMobile',
+  ];
+
+  // Check if the user agent contains any mobile device keywords
+  return mobileKeywords.some(keyword => userAgent.includes(keyword));
 }

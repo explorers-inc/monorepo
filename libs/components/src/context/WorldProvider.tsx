@@ -2,6 +2,7 @@ import { trpc } from '@explorers-club/api-client';
 import {
   ConnectionEntity,
   Entity,
+  EntityCommand,
   InitializedConnectionEntity,
   SnowflakeId,
   SyncedEntityProps,
@@ -59,7 +60,7 @@ export const WorldProvider: FC<{
 }> = ({ children, world }) => {
   const { client } = trpc.useContext();
   type Callback = Parameters<Entity['subscribe']>[0];
-  const entitiesById = createIndex(world);
+  const [entitiesById] = useState(createIndex(world));
   // window.$WORLD = world;
   // const [subscribersById] = useState(new Map<SnowflakeId, Set<() => void>>());
   const [nextFnById] = useState(new Map<SnowflakeId, Callback>());
@@ -79,8 +80,8 @@ export const WorldProvider: FC<{
           command,
         } as TEvent);
         await client.entity.send.mutate({
-          id,
-          event: command,
+          entityId: id,
+          command: command as EntityCommand,
         });
         next({
           type: 'SEND_COMPLETE',
@@ -179,85 +180,105 @@ export const WorldProvider: FC<{
     return sub.unsubscribe;
   }, [client, createEntity, nextFnById, world]);
 
-  const useEntitySelector = <T extends Entity, R>(
-    id: SnowflakeId,
-    selector: Selector<T, R>
-  ) => {
-    const getSnapshot = () => {
-      const entity = entitiesById.get(id) as T | undefined;
-      if (!entity) {
-        throw new Error('entity missing: ' + entity);
-      }
-
-      return entity;
-    };
-
-    const subscribe = (onStoreChange: () => void) => {
-      const entity = entitiesById.get(id);
-      if (!entity) {
-        throw new Error('entity missing: ' + entity);
-      }
-
-      const unsub = entity.subscribe(onStoreChange);
-
-      return () => {
-        unsub();
-      };
-    };
-
-    return useSyncExternalStoreWithSelector(
-      subscribe,
-      getSnapshot,
-      getSnapshot,
-      selector
-    );
-  };
-
-  const createEntityStore = <TEntity extends Entity>(
-    query: (entity: Entity) => boolean
-  ) => {
-    const store = atom<TEntity | null>(null);
-    for (const entity of world.entities) {
-      if (query(entity)) {
-        store.set(entity as TEntity);
-      }
-    }
-
-    // todo fix mem leak
-    world.onEntityAdded.add((entity) => {
-      if (query(entity as TEntity)) {
-        store.set(entity as TEntity);
-      }
-
-      entity.subscribe(() => {
-        if (!store.get() && query(entity as TEntity)) {
-          store.set(entity as TEntity);
+  const useEntitySelector = useCallback(
+    <T extends Entity, R>(id: SnowflakeId, selector: Selector<T, R>) => {
+      const getSnapshot = () => {
+        const entity = entitiesById.get(id) as T | undefined;
+        if (!entity) {
+          throw new Error('entity missing: ' + entity);
         }
 
-        if (store.get() && !query(entity as TEntity)) {
+        return entity;
+      };
+
+      const subscribe = (onStoreChange: () => void) => {
+        const entity = entitiesById.get(id);
+        if (!entity) {
+          throw new Error('entity missing: ' + entity);
+        }
+
+        const unsub = entity.subscribe(onStoreChange);
+
+        return () => {
+          unsub();
+        };
+      };
+
+      return useSyncExternalStoreWithSelector(
+        subscribe,
+        getSnapshot,
+        getSnapshot,
+        selector
+      );
+    },
+    []
+  );
+
+  /**
+   * Entity stores hold a reference to an entity
+   * This function creates an entity store given a query function.
+   *
+   * It allows components to specify what they are looking for and then "wait"
+   * for the entity to show up in the store. They can then use
+   * useEntityStoreSelector to select typed data from the store, returning
+   * null for the selected data if the entity does not exist.
+   */
+  const createEntityStore = useCallback(
+    <TEntity extends Entity>(query: (entity: Entity) => boolean) => {
+      const store = atom<TEntity | null>(null);
+      // take the first entity to match it
+      for (const entity of world.entities) {
+        if (query(entity)) {
+          store.set(entity as TEntity);
+          break;
+        }
+      }
+
+      // todo fix mem leak
+      world.onEntityAdded.add((addedEntity) => {
+        if (query(addedEntity as TEntity)) {
+          store.set(addedEntity as TEntity);
+        }
+
+        addedEntity.subscribe(() => {
+          // console.log(
+          //   'entity event sub',
+          //   JSON.parse(JSON.stringify(addedEntity))
+          // );
+          // console.log('store', store.get());
+          // console.log('query', query, query(addedEntity));
+          if (!store.get() && query(addedEntity as TEntity)) {
+            console.log('SETTING!');
+            store.set(addedEntity as TEntity);
+          }
+
+          if (addedEntity === store.get() && !query(addedEntity as TEntity)) {
+            store.set(null);
+          }
+        });
+      });
+
+      world.onEntityRemoved.add((entity) => {
+        if (store.get() === entity) {
           store.set(null);
         }
       });
-    });
 
-    world.onEntityRemoved.add((entity) => {
-      if (store.get() === entity) {
-        store.set(null);
-      }
-    });
-
-    return store;
-  };
-  const entityStoreRegistry = {
+      return store;
+    },
+    []
+  );
+  const [entityStoreRegistry] = useState({
     myConnectionEntity: createEntityStore<ConnectionEntity>(
       (entity) => entity.schema === 'connection'
     ),
     myInitializedConnectionEntity:
-      createEntityStore<InitializedConnectionEntity>(
-        (entity) =>
+      createEntityStore<InitializedConnectionEntity>((entity) => {
+        return (
           entity.schema === 'connection' && entity.states.Initialized === 'True'
-      ),
-  } satisfies EntityStoreRegistry;
+        );
+      }),
+  } satisfies EntityStoreRegistry);
 
   return (
     <WorldContext.Provider

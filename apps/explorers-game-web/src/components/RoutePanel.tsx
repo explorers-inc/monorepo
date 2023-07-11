@@ -1,26 +1,25 @@
 import { Box } from '@atoms/Box';
+import { ButtonLink } from '@atoms/Button';
 import { Flex } from '@atoms/Flex';
 import { Heading } from '@atoms/Heading';
+import { ApplicationContext } from '@context/ApplicationContext';
 import { InitializedConnectionEntityContext } from '@context/Entity';
+import { WorldContext } from '@context/WorldProvider';
+import type { RoomEntity } from '@explorers-club/schema';
+import { useCreateEntityStore } from '@hooks/useCreateEntityStore';
+import { useEntityStoreSelector } from '@hooks/useEntityStoreSelector';
 import { useStore } from '@nanostores/react';
 import { NewRoomFlow } from '@organisms/new-room-flow';
 import { Room } from '@organisms/room';
-import { useCreateEntityStore } from '@hooks/useCreateEntityStore';
-import { ButtonLink } from '@atoms/Button';
+import { RoomProvider } from '@organisms/room/room.context';
 import { MouseEventHandler, useCallback, useContext } from 'react';
-import { RoomContext } from '@organisms/room/room.context';
-import { useEntitySelector } from '@hooks/useEntitySelector';
-import { useEntityStoreSelector } from '@hooks/useEntityStoreSelector';
-import type { RoomEntity } from '@explorers-club/schema';
-import { ApplicationContext } from '@context/ApplicationContext';
-import { WorldContext } from '@context/WorldProvider';
 
-export const MainPanel = () => {
+export const RoutePanel = () => {
   const { routeStore } = useContext(ApplicationContext);
   const currentRoute = useStore(routeStore);
 
   return (
-    <Box css={{ p: '$3', background: 'black' }}>
+    <Box css={{ p: '$3' }}>
       {currentRoute.name === 'Home' && <HomePanel />}
       {currentRoute.name === 'NewRoom' && <NewRoomPanel />}
       {currentRoute.name === 'Login' && <LoginPanel />}
@@ -70,33 +69,33 @@ const NewRoomPanel = () => {
   ) : null;
 };
 
+// TODO make this common to be able to use in HTML and canvas
 const RoomPanel = () => {
   const { entityStoreRegistry } = useContext(WorldContext);
-  const currentRoomSlug = useEntityStoreSelector(
-    entityStoreRegistry.myInitializedConnectionEntity,
-    (entity) => entity.currentRoomSlug
-  );
-  const roomEntityStore = useCreateEntityStore<RoomEntity>(
-    (entity) => {
-      return (currentRoomSlug &&
-        entity.schema === 'room' &&
-        entity.slug === currentRoomSlug) as boolean;
-    },
-    [currentRoomSlug]
-  );
-
-  const roomEntity = useStore(roomEntityStore);
   const connectionEntity = useStore(
     entityStoreRegistry.myInitializedConnectionEntity
   );
+  const currentChannelId = useEntityStoreSelector(
+    entityStoreRegistry.myInitializedConnectionEntity,
+    (entity) => entity.currentChannelId
+  );
+
+  const roomEntityStore = useCreateEntityStore<RoomEntity>(
+    (entity) => {
+      return (currentChannelId && entity.id === currentChannelId) as boolean;
+    },
+    [currentChannelId]
+  );
+
+  const roomEntity = useStore(roomEntityStore);
 
   if (!roomEntity || !connectionEntity) {
     return <div>loading entities</div>;
   }
 
   return (
-    <RoomContext.Provider value={{ connectionEntity, roomEntity }}>
+    <RoomProvider>
       <Room />
-    </RoomContext.Provider>
+    </RoomProvider>
   );
 };

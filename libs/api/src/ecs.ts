@@ -1,61 +1,40 @@
 import {
-  CallbackFromEntity,
+  ChannelEvent,
+  CreateEventProps,
   Entity,
   EntityMachineMap,
   // EntityMessageMap,
   EntityServiceKeys,
-  EventFromEntity,
+  EventTriggerConfigSchema,
   InitialEntityProps,
   SnowflakeId,
+  TriggerEntity,
+  TriggerInput,
 } from '@explorers-club/schema';
+// import { EventTriggerConfigSche}
+// import { TriggerInputSchema } from '@schema/lib/trigger';
+import { assert, fromWorld } from '@explorers-club/utils';
 import { compare } from 'fast-json-patch';
 import { enablePatches, produce, setAutoFreeze } from 'immer';
-import { AnyActorRef, InterpreterFrom, interpret } from 'xstate';
-import { world } from './server/state';
-import { EPOCH, TICK_RATE } from './ecs.constants';
+import { Observable, ReplaySubject, map, mergeMap } from 'rxjs';
+import {
+  AnyActorRef,
+  AnyFunction,
+  InterpreterFrom,
+  assign,
+  createMachine,
+  interpret,
+} from 'xstate';
+import { generateSnowflakeId } from './ids';
 import { machineMap } from './machines';
-import { Observable, ReplaySubject, Subject } from 'rxjs';
-import { FromObservable, ObservableProps } from '@explorers-club/utils';
+import { channelsById, entitiesById, world } from './server/state';
+// import { eventTriggerDispatchMachine } from './services/event-trigger-dispatch.service';
+import { World } from 'miniplex';
+// import { greetOnJoinTrigger } from './configs/triggers';
+import { ChangeEvent } from 'react';
 
 enablePatches();
 setAutoFreeze(false);
-
-export function getCurrentTick(): number {
-  const now = new Date();
-  const timeSinceEpoch = now.getTime() - EPOCH;
-  const tick = Math.floor(timeSinceEpoch / (1000 / TICK_RATE));
-  const tickDecimal = (timeSinceEpoch / (1000 / TICK_RATE)) % 1;
-  return parseFloat(`${tick}.${tickDecimal.toFixed(1).slice(2)}`);
-}
-
-const WORKER_ID_BITS = 10;
-const SEQUENCE_BITS = 12;
-
-const workerId = Math.floor(Math.random() * 2 ** WORKER_ID_BITS);
-let sequence = 0;
-let lastTimestamp = -1;
-
-export function generateSnowflakeId(): string {
-  let timestamp = Date.now() - EPOCH;
-  if (timestamp === lastTimestamp) {
-    sequence = (sequence + 1) % 2 ** SEQUENCE_BITS;
-    if (sequence === 0) {
-      // Sequence overflow, wait for next millisecond
-      timestamp++;
-      while (Date.now() - EPOCH <= timestamp) {
-        // Wait
-      }
-    }
-  } else {
-    sequence = 0;
-  }
-  lastTimestamp = timestamp;
-  const id =
-    (timestamp << (WORKER_ID_BITS + SEQUENCE_BITS)) |
-    (workerId << SEQUENCE_BITS) |
-    sequence;
-  return id.toString();
-}
 
 /**
  * Isomorphic function for creating an entity.
@@ -75,7 +54,7 @@ export const createEntity = <TEntity extends Entity>(
   type TInterpreter = InterpreterFrom<TMachine>;
   type TStateValue = TEntity['states'];
   type TCommand = Parameters<TEntity['send']>[0];
-  const id = generateSnowflakeId();
+  const id = entityProps.id || generateSnowflakeId();
 
   const subscriptions = new Set<TCallback>();
 
@@ -88,7 +67,8 @@ export const createEntity = <TEntity extends Entity>(
 
   const next = (event: TEvent) => {
     for (const callback of subscriptions) {
-      callback(event as any); // todo fix TS not liking nested union types on event
+      const fn = callback as AnyFunction;
+      fn(event); // todo ts doesnt like this, not sure why
     }
   };
 
@@ -98,6 +78,8 @@ export const createEntity = <TEntity extends Entity>(
         type Prop = keyof typeof draft;
         draft[property as Prop] = value;
       });
+      // console.log(property, value, target);
+      // delete nextTarget['channel']; // hack
 
       const patches = compare(target, nextTarget);
       target[property as PropNames] = value;
@@ -149,26 +131,40 @@ export const createEntity = <TEntity extends Entity>(
     subscribe,
   };
 
-  const channel = new ReplaySubject(5 /* msg buffer size */); // not always used but passed in anyways
+  const channelSubject = new ReplaySubject<CreateEventProps<ChannelEvent>>(
+    5 /* msg buffer size */
+  );
+  const channelObservable = channelSubject.pipe(
+    map((event) => {
+      return {
+        ...event,
+        id: generateSnowflakeId(),
+        channelId: id,
+      } as ChannelEvent;
+    })
+  );
+  channelsById.set(id, channelObservable);
 
   const entity: TEntity = {
     ...entityBase,
     ...entityProps,
-    channel,
   } as unknown as TEntity; // todo fix hack, pretty sure this works though
 
   const proxy = new Proxy(entity, handler);
   const machine = machineMap[entityProps.schema]({
     world,
     entity: proxy,
-    channel,
+    channel: channelSubject,
   });
-  // todo fix types
+
   const service = interpret(machine as any) as unknown as TInterpreter;
 
-  service.start();
+  proxy.states = machine.initialState.value as TStateValue;
 
-  proxy.states = service.getSnapshot().value as TStateValue;
+  // todo might need to do onAddWorld somehow
+  setTimeout(() => {
+    service.start();
+  }, 0);
 
   const attachedServices: Partial<Record<ServiceId, AnyActorRef>> = {};
 
@@ -211,3 +207,105 @@ export const createEntity = <TEntity extends Entity>(
 
   return proxy;
 };
+
+type TriggerDispatchContext = {
+  world: World<Entity>;
+  entitiesById: Map<SnowflakeId, Entity>;
+  configs: EventTriggerConfigSchema[];
+  triggerEntities: Record<SnowflakeId, TriggerEntity>;
+};
+
+const eventTriggerDispatchMachine = createMachine({
+  id: 'EventTriggerDispatchMachine',
+  initial: 'Running',
+  schema: {
+    context: {} as TriggerDispatchContext,
+    events: {} as ChannelEvent,
+  },
+  states: {
+    Running: {
+      on: {
+        '*': {
+          actions: 'maybeCreateEventTriggerEntity',
+        },
+      },
+      invoke: {
+        src: (context) =>
+          fromWorld(context.world).pipe(
+            mergeMap((entity) => {
+              const channel = channelsById.get(entity.id);
+              assert(channel, 'expected channel when creating trigger');
+              return channel;
+            })
+          ),
+        onDone: 'Done',
+        onError: 'Error',
+      },
+    },
+    Done: {
+      entry: () => {
+        console.log('DONE!');
+      },
+    },
+    Error: {},
+  },
+});
+
+const eventTriggerDispatchService = interpret(
+  eventTriggerDispatchMachine
+    .withContext({
+      world,
+      triggerEntities: {},
+      entitiesById,
+      configs: [],
+    })
+    .withConfig({
+      actions: {
+        maybeCreateEventTriggerEntity: assign({
+          triggerEntities: (
+            { entitiesById, configs, triggerEntities },
+            event
+          ) => {
+            const entity = entitiesById.get(event.channelId);
+            assert(
+              entity,
+              'expected channel entity when processing channel event but not found, channelId: ' +
+                event.channelId
+            );
+            const result = {
+              ...triggerEntities,
+            };
+            for (const config of configs) {
+              // Must match entity schema
+              if (entity.schema !== config.entity.schema) {
+                break;
+              }
+              // Must match event type
+              if (event.type !== config.event.type) {
+                break;
+              }
+
+              // TODO future filters/matchers go here
+
+              const triggerEntity = createEntity<TriggerEntity>({
+                schema: 'trigger',
+                config,
+                input: {
+                  triggerType: 'event',
+                  entity,
+                  event,
+                  metadata: {},
+                } satisfies TriggerInput,
+                // input:
+              });
+
+              world.add(triggerEntity);
+              result[triggerEntity.id] = triggerEntity;
+            }
+            return result;
+          },
+        }),
+      },
+    })
+);
+eventTriggerDispatchService.start();
